@@ -1,0 +1,106 @@
+{
+  "name": "claude-swap-sidebar",
+  "displayName": "Claude Swap Sidebar",
+  "description": "claude-swap accounts in the VS Code side bar and status bar: 5-hour and weekly usage, and one-click switching.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mengfoong-dev/claude-swap.git",
+    "directory": "vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudeSwap",
+          "title": "Claude Swap",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudeSwap": [
+        {
+          "type": "webview",
+          "id": "claudeSwap.accounts",
+          "name": "Accounts"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeSwap.refresh",
+        "title": "Refresh usage",
+        "category": "Claude Swap",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudeSwap.switch",
+        "title": "Switch account…",
+        "category": "Claude Swap",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "claudeSwap.switchBest",
+        "title": "Switch to the account with the most room",
+        "category": "Claude Swap"
+      },
+      {
+        "command": "claudeSwap.addAccount",
+        "title": "Add the current login as an account",
+        "category": "Claude Swap"
+      },
+      {
+        "command": "claudeSwap.dashboard",
+        "title": "Open the full dashboard (terminal)",
+        "category": "Claude Swap"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudeSwap.switch",
+          "when": "view == claudeSwap.accounts",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudeSwap.refresh",
+          "when": "view == claudeSwap.accounts",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Swap",
+      "properties": {
+        "claudeSwap.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Full path to the cswap command. Empty: ~/.local/bin/cswap if it exists, else cswap on PATH."
+        },
+        "claudeSwap.pollSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 30,
+          "description": "How often to run `cswap list --json`. claude-swap still decides how often it actually contacts Anthropic, so a short interval does not add network load."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
