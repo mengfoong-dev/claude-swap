@@ -2,7 +2,7 @@
   "name": "claude-swap-sidebar",
   "displayName": "Claude Swap Sidebar",
   "description": "claude-swap accounts in the VS Code side bar and status bar: 5-hour and weekly usage, and one-click switching.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -66,6 +66,11 @@
         "command": "claudeSwap.dashboard",
         "title": "Open the full dashboard (terminal)",
         "category": "Claude Swap"
+      },
+      {
+        "command": "claudeSwap.toggleAuto",
+        "title": "Turn auto-switch on or off",
+        "category": "Claude Swap"
       }
     ],
     "menus": {
@@ -79,6 +84,26 @@
           "command": "claudeSwap.refresh",
           "when": "view == claudeSwap.accounts",
           "group": "navigation@2"
+        },
+        {
+          "command": "claudeSwap.addAccount",
+          "when": "view == claudeSwap.accounts",
+          "group": "1_accounts@1"
+        },
+        {
+          "command": "claudeSwap.switchBest",
+          "when": "view == claudeSwap.accounts",
+          "group": "1_accounts@2"
+        },
+        {
+          "command": "claudeSwap.toggleAuto",
+          "when": "view == claudeSwap.accounts",
+          "group": "2_auto@1"
+        },
+        {
+          "command": "claudeSwap.dashboard",
+          "when": "view == claudeSwap.accounts",
+          "group": "3_more@1"
         }
       ]
     },
@@ -96,6 +121,20 @@
           "default": 60,
           "minimum": 30,
           "description": "How often to run `cswap list --json`. claude-swap still decides how often it actually contacts Anthropic, so a short interval does not add network load."
+        },
+        "claudeSwap.autoSwitch": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "description": "Run one `cswap auto --once` tick after each poll: when the active account reaches the line on any limit, claude-swap moves Claude Code to the account with the most room. Asks for confirmation the first time."
+        },
+        "claudeSwap.autoSwitchThreshold": {
+          "type": "number",
+          "default": 90,
+          "minimum": 50,
+          "maximum": 99,
+          "scope": "machine",
+          "description": "Auto-switch line, in percent of any limit (5-hour, weekly or per-model)."
         }
       }
     }

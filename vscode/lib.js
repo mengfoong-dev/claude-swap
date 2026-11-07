@@ -12,6 +12,9 @@ const STATUS_TEXT = {
     no_credentials: 'No saved login',
     api_key: 'API key (no quota)',
 };
+const RELOGIN = new Set(['relogin_required', 'token_expired', 'no_credentials']);
+const LOGIN_WARN_DAYS = 7;   // warn this many days before a stored login ends
+const MODEL_SHOW_PCT = 60;   // a per-model window is shown for a non-active account only from this level
 
 const toEpoch = (iso) => {
     if (typeof iso !== 'string') return null;
@@ -32,15 +35,15 @@ function fmtDuration(secs) {
 }
 
 // A window whose reset has passed is a new, empty window until cswap fetches again: show 0%, not the old number.
-function windowView(w, now) {
+function windowView(name, w, now) {
     if (!w) return null;
     const reset = toEpoch(w.resetsAt);
     const rolled = reset != null && reset <= now;
     return {
+        name,
         pct: rolled ? 0 : pctOf(w),
         reset: rolled ? null : reset,
         resetIn: rolled ? '' : fmtDuration(reset == null ? null : reset - now),
-        aheadOfPace: !rolled && w.aheadOfPace === true,
         willLast: rolled ? true : w.willLastToReset !== false,
         runsOutAt: rolled ? null : toEpoch(w.projectedExhaustionAt),
     };
@@ -55,56 +58,96 @@ function labelOf(a) {
 // One account row in display shape.
 function accountView(a, now) {
     const u = a.usage || a.lastGoodUsage || null;  // lastGoodUsage: shown, but never used to pick a switch target
-    const five = windowView(u && u.fiveHour, now), week = windowView(u && u.sevenDay, now);
-    const models = Array.isArray(u && u.scoped)
-        ? u.scoped.filter((s) => s && s.name).map((s) => ({ name: String(s.name), ...windowView(s, now) }))
-        : [];
+    const windows = [
+        windowView('5h', u && u.fiveHour, now),
+        windowView('7d', u && u.sevenDay, now),
+        ...(Array.isArray(u && u.scoped) ? u.scoped.filter((s) => s && s.name).map((s) => windowView(String(s.name), s, now)) : []),
+    ].filter(Boolean);
     const status = Object.prototype.hasOwnProperty.call(STATUS_TEXT, a.usageStatus) ? a.usageStatus : 'unavailable';
-    const pcts = [five, week, ...models].map((w) => w && w.pct).filter((p) => p != null);
-    const full = pcts.some((p) => p >= 100);
-    const peak = pcts.length ? Math.max(...pcts) : null;
+    const pcts = windows.map((w) => w.pct).filter((p) => p != null);
+    const fullWins = windows.filter((w) => w.pct != null && w.pct >= 100);
+    // Usable again when every full window has reset: the latest of their resets.
+    const backAt = fullWins.length && fullWins.every((w) => w.reset != null) ? Math.max(...fullWins.map((w) => w.reset)) : null;
+    const loginExpires = toEpoch(a.loginExpiresAt);
     let state;
     if (a.active) state = 'active';
-    else if (status === 'relogin_required' || status === 'token_expired' || status === 'no_credentials') state = 'relogin';
+    else if (RELOGIN.has(status)) state = 'relogin';
     else if (a.disabled) state = 'disabled';
-    else if (full) state = 'full';
-    else if (status === 'ok') state = 'switch';
+    else if (fullWins.length) state = 'full';
+    else if (status === 'ok') state = 'usable';
     else state = 'nodata';
     return {
         number: a.number,
         label: labelOf(a),
         email: typeof a.email === 'string' ? a.email : '',
-        org: a.organizationName || '',
-        plan: (a.plan && a.plan.label) || '',
         active: !!a.active,
         disabled: !!a.disabled,
         status,
         statusText: STATUS_TEXT[status],
         state,
-        full,
-        peak,
+        full: fullWins.length > 0,
+        peak: pcts.length ? Math.max(...pcts) : null,
+        backAt,
+        backIn: backAt == null ? '' : fmtDuration(backAt - now),
         stale: !a.usage && !!a.lastGoodUsage,
-        ageSec: typeof a.usageAgeSeconds === 'number' ? a.usageAgeSeconds : (typeof a.lastGoodAgeSeconds === 'number' ? a.lastGoodAgeSeconds : null),
         error: a.usageError || null,
-        five,
-        week,
-        models,
-        loginExpires: toEpoch(a.loginExpiresAt),
+        windows,
+        weekReset: (windows.find((w) => w.name === '7d') || {}).reset ?? null,
+        loginExpires,
+        loginDaysLeft: loginExpires == null ? null : Math.floor((loginExpires - now) / 86400),
     };
 }
 
-// The account to suggest when the active one runs out: lowest peak usage among accounts that are not active,
-// not disabled, have fresh ('ok') usage and nothing at 100%. Null when there is none.
-function bestTarget(accounts) {
-    let best = null;
-    for (const a of accounts) {
-        if (a.active || a.disabled || a.status !== 'ok' || a.full || a.peak == null) continue;
-        if (!best || a.peak < best.peak) best = a;
-    }
-    return best;
+// Lowest peak usage wins; on a near-tie (within 5 points) the account whose weekly window resets sooner, so quota
+// that would expire unused is spent first.
+function byRoom(a, b) {
+    if (Math.abs(a.peak - b.peak) > 5) return a.peak - b.peak;
+    return (a.weekReset ?? Infinity) - (b.weekReset ?? Infinity) || a.peak - b.peak;
 }
 
-// Parse `cswap list --json` stdout -> { accounts, active, best } or { error }.
+// The account to suggest: not active, not disabled, fresh ('ok') usage, nothing at 100%. Null when there is none.
+function bestTarget(accounts) {
+    const ok = accounts.filter((a) => !a.active && !a.disabled && a.status === 'ok' && !a.full && a.peak != null);
+    return ok.sort(byRoom)[0] || null;
+}
+
+// Display order: active, usable by most room, then no data / re-login / disabled, then full by soonest back.
+const RANK = { active: 0, usable: 1, nodata: 2, relogin: 3, disabled: 4, full: 5 };
+function sortAccounts(accounts) {
+    return [...accounts].sort((a, b) => (RANK[a.state] - RANK[b.state])
+        || (a.state === 'usable' ? byRoom(a, b) : 0)
+        || (a.state === 'full' ? (a.backAt ?? Infinity) - (b.backAt ?? Infinity) : 0)
+        || a.number - b.number);
+}
+
+// Warnings shown at the foot of the panel; empty when nothing needs attention.
+function footWarnings(accounts, now) {
+    const out = [];
+    for (const a of accounts) {
+        if (a.state === 'relogin') out.push(`${a.label}: ${a.statusText.toLowerCase()} (log in, then Add)`);
+        else if (a.loginDaysLeft != null && a.loginDaysLeft < LOGIN_WARN_DAYS) {
+            out.push(a.loginDaysLeft <= 0 ? `${a.label}: login ends today` : `${a.label}: login ends in ${a.loginDaysLeft} day${a.loginDaysLeft === 1 ? '' : 's'}`);
+        }
+    }
+    return out;
+}
+
+// The active account's pace warning: the first weekly window that will not last to its reset.
+function paceWarning(active) {
+    if (!active) return null;
+    const w = active.windows.find((x) => x.name !== '5h' && !x.willLast && x.runsOutAt && x.pct < 100);
+    if (!w) return null;
+    return { window: w.name === '7d' ? 'Weekly' : `${w.name} weekly`, at: w.runsOutAt };
+}
+
+// Which windows to draw for a row: all of them for the active account; for others 5h and 7d, plus any per-model
+// window that is getting high.
+function visibleWindows(a) {
+    if (a.active) return a.windows;
+    return a.windows.filter((w) => w.name === '5h' || w.name === '7d' || (w.pct != null && w.pct >= MODEL_SHOW_PCT));
+}
+
+// Parse `cswap list --json` stdout -> { accounts (display order), active, best, warnings, pace } or { error }.
 function parseList(text, now = Math.floor(Date.now() / 1000)) {
     let doc;
     try { doc = JSON.parse(text); } catch { return { error: 'cswap returned output that is not JSON.' }; }
@@ -112,22 +155,26 @@ function parseList(text, now = Math.floor(Date.now() / 1000)) {
     if (doc.error) return { error: (doc.error && (doc.error.message || doc.error.kind)) || 'cswap reported an error.' };
     if (doc.schemaVersion !== 1) return { error: `Unsupported cswap JSON schema (${doc.schemaVersion}); update this extension.` };
     if (!Array.isArray(doc.accounts)) return { error: 'cswap JSON has no accounts list.' };
-    const accounts = doc.accounts.filter((a) => a && Number.isInteger(a.number)).map((a) => accountView(a, now));
-    return { accounts, active: accounts.find((a) => a.active) || null, best: bestTarget(accounts) };
+    const accounts = sortAccounts(doc.accounts.filter((a) => a && Number.isInteger(a.number)).map((a) => accountView(a, now)))
+        .map((a) => ({ ...a, shown: visibleWindows(a) }));
+    const active = accounts.find((a) => a.active) || null;
+    return {
+        accounts,
+        active,
+        best: bestTarget(accounts),
+        warnings: footWarnings(accounts, now),
+        pace: paceWarning(active),
+    };
 }
 
-// Status bar: "work 13% · 91%", with the next-best account when there is one.
+// Status bar: "work 13% · 91% ⇄ personal".
 function statusBarText(model) {
     if (!model || model.error) return '$(pulse) Claude Swap';
     const a = model.active;
     if (!a) return '$(pulse) no active account';
-    const p = (w) => (w && w.pct != null ? `${w.pct}%` : '—');
-    const nums = a.five || a.week ? ` ${p(a.five)} · ${p(a.week)}` : '';
+    const p = (name) => { const w = a.windows.find((x) => x.name === name); return w && w.pct != null ? `${w.pct}%` : '—'; };
     const next = model.best ? ` $(arrow-swap) ${model.best.label}` : '';
-    return `$(pulse) ${a.label}${nums}${next}`;
+    return `$(pulse) ${a.label} ${p('5h')} · ${p('7d')}${next}`;
 }
 
-// Severity of a percentage, for colour: same bands as the cc-usage-bar meters.
-const level = (pct) => (pct == null ? 'none' : pct >= 85 ? 'danger' : pct >= 60 ? 'warn' : 'ok');
-
-module.exports = { parseList, accountView, bestTarget, statusBarText, fmtDuration, level, labelOf };
+module.exports = { parseList, accountView, bestTarget, sortAccounts, statusBarText, fmtDuration, labelOf, LOGIN_WARN_DAYS };

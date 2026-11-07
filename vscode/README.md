@@ -19,10 +19,23 @@ code --install-extension claude-swap-sidebar-*.vsix
 
 ## What it shows
 
-- **Active account**: session (5hr) and weekly bars, per-model weekly limits, reset countdowns, and a warning when
-  the current pace runs out before the reset.
-- **If you run out**: the account with the lowest peak usage that is fresh, enabled and below 100% everywhere.
-- **Accounts**: every saved account; click one for its bars and a Switch button.
-- **Status bar**: `work 13% · 91% ⇄ personal`. Orange from 85%, red at 100%. Click it to open the side bar.
+One flat list, laid out like `cswap watch`:
 
-Settings: `claudeSwap.path` (where `cswap` is) and `claudeSwap.pollSeconds` (default 60).
+- **Active account first**, with every limit (5-hour, weekly, per-model), reset countdowns, and a warning when the
+  current pace runs out before the weekly reset.
+- **Then the other accounts, most room first.** The best pick is marked ★ (lowest peak usage; on a near-tie, the one
+  whose weekly window resets sooner, so quota is not left to expire). Each has a **Switch** button.
+- **Accounts at 100%** shrink to one line: `full · back in 2d 4h`.
+- **Warnings at the foot only when needed**: re-login required, or a login that ends within 7 days.
+- **Status bar**: `work 13% · 91% ⇄ personal`. Orange from 85%, red at 100%. Click it to open the side bar.
+- **Header**: switch (quick pick) and refresh; the ⋯ menu has add account, switch to best, auto-switch, and the
+  full terminal dashboard.
+
+## Auto-switch (off by default)
+
+The toggle at the top runs one tick of claude-swap's own engine (`cswap auto --once --threshold N --model all`)
+after each poll. When the active account reaches the line on any limit, claude-swap moves Claude Code to the
+account with the most room, with its own cooldown and hysteresis. It asks for confirmation the first time.
+
+Settings: `claudeSwap.path`, `claudeSwap.pollSeconds` (default 60), `claudeSwap.autoSwitch`,
+`claudeSwap.autoSwitchThreshold` (default 90).
